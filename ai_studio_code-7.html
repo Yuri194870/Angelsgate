@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
+    <title>Advanced Wind Monitor AGXC1</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment-timezone/0.5.43/moment-timezone-with-data.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs@2.0.8"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.1"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 0; background-color: #f0f2f5; padding: 20px; }
+        .container { max-width: 1100px; margin: auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #f0f0f0; padding-bottom: 15px; margin-bottom: 20px; }
+        h1 { margin: 0; color: #1a73e8; font-size: 1.5rem; }
+        .upload-section { background: #f8fbff; border: 2px dashed #1a73e8; padding: 20px; text-align: center; border-radius: 10px; margin-bottom: 20px; }
+        .controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; background: #f8f9fa; padding: 15px; border-radius: 10px; margin-bottom: 20px; display: none; }
+        .control-group { display: flex; flex-direction: column; }
+        label { font-size: 0.85rem; font-weight: bold; color: #555; margin-bottom: 5px; }
+        input, select { padding: 8px; border: 1px solid #ddd; border-radius: 5px; }
+        .dashboard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px; display: none; }
+        .stat-card { background: #fff; border: 1px solid #eee; padding: 15px; border-radius: 10px; text-align: center; }
+        .stat-card .value { font-size: 1.4rem; font-weight: bold; color: #1a73e8; }
+        .stat-card .label { font-size: 0.8rem; color: #777; text-transform: uppercase; }
+        .chart-container { position: relative; height: 60vh; width: 100%; }
+        .hint { font-size: 0.75rem; color: #999; margin-top: 10px; text-align: center; }
+        #error-box { color: #c0392b; background: #fdf2f2; padding: 10px; border-radius: 5px; margin-top: 10px; display: none; border: 1px solid #f8d7da; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="header">
+        <h1>AGXC1 Wind Monitor - Angel Island</h1>
+        <div style="text-align: right;">
+            <button id="refreshBtn" style="background:#1a73e8; color:white; border:none; padding:6px 14px; border-radius:6px; font-weight:bold; cursor:pointer;">↻ Ververs</button>
+            <div id="file-status" style="font-size: 0.75rem; color: #777; margin-top: 4px;"></div>
+        </div>
+    </div>
+
+    <div class="upload-section" id="upload-box">
+        <strong id="loading-text">Live data laden van NOAA...</strong>
+        <div id="error-box"></div>
+    </div>
+
+    <div class="dashboard" id="dashboard">
+        <div class="stat-card"><div class="label">Max Wind (Kts)</div><div id="stat-max" class="value">-</div></div>
+        <div class="stat-card"><div class="label">Gemiddeld (Kts)</div><div id="stat-avg" class="value">-</div></div>
+        <div class="stat-card"><div class="label">Tijdzone</div><div class="value" style="font-size: 1rem;">Los Angeles (PT)</div></div>
+    </div>
+
+    <div class="controls" id="controls">
+        <div class="control-group"><label>Van:</label><input type="datetime-local" id="startDate"></div>
+        <div class="control-group"><label>Tot:</label><input type="datetime-local" id="endDate"></div>
+        <div class="control-group">
+            <label>Snelkoppeling:</label>
+            <select id="quickSelect">
+                <option value="24h">Laatste 24 uur</option>
+                <option value="7d">Laatste 7 dagen</option>
+                <option value="all">Volledig bestand</option>
+                <option value="custom">Handmatig bereik</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="windChart"></canvas>
+    </div>
+    <div class="hint" id="hint" style="display:none;">
+        Scroll om te zoomen • Klik en sleep om te pannen
+    </div>
+</div>
+
+<script>
+    let allData = [];
+    let myChart = null;
+    let firstLoadDone = false;
+
+    // We gebruiken AllOrigins proxy om CORS problemen te omzeilen
+    const NOAA_URL = 'https://www.ndbc.noaa.gov/data/realtime2/AGXC1.txt';
+    const PROXY_URL = 'https://api.allorigins.win/get?url=';
+
+    async function fetchLiveData() {
+        const statusEl = document.getElementById('file-status');
+        const errorBox = document.getElementById('error-box');
+        const loadingText = document.getElementById('loading-text');
+        
+        statusEl.innerText = 'Bezig met ophalen...';
+        errorBox.style.display = 'none';
+
+        try {
+            // We halen de data op via de proxy
+            const response = await fetch(`${PROXY_URL}${encodeURIComponent(NOAA_URL)}&timestamp=${Date.now()}`);
+            if (!response.ok) throw new Error('Proxy server fout');
+            
+            const json = await response.json();
+            const text = json.contents; // AllOrigins stelt de data beschikbaar in de 'contents' property
+
+            if (!text || text.length < 100) throw new Error('Geen geldige data ontvangen van NOAA');
+
+            parseData(text);
+            
+            if (!firstLoadDone) {
+                firstLoadDone = true;
+                initUI();
+            } else {
+                updateChart();
+            }
+
+            statusEl.innerText = 'Laatst ververst: ' + moment().format('HH:mm:ss');
+        } catch (err) {
+            console.error(err);
+            errorBox.innerText = 'Fout: ' + err.message + '. Controleer je internet of probeer later opnieuw.';
+            errorBox.style.display = 'block';
+            loadingText.innerText = 'Laden mislukt.';
+        }
+    }
+
+    function parseData(text) {
+        const lines = text.trim().split('\n');
+        const dataRows = lines.slice(2); // Sla de 2 header regels over
+        
+        allData = dataRows.map(line => {
+            const c = line.trim().split(/\s+/);
+            if (c.length < 8) return null;
+
+            // NOAA data: YYYY MM DD hh mm
+            const utcTime = moment.utc(`${c[0]}-${c[1]}-${c[2]} ${c[3]}:${c[4]}`, "YYYY-MM-DD HH:mm");
+            const laTime = utcTime.clone().tz("America/Los_Angeles");
+
+            // WSPD is kolom 6, GST is kolom 7 (in m/s, dus * 1.94384 voor knopen)
+            const wspd = parseFloat(c[6]);
+            const gst = parseFloat(c[7]);
+
+            return {
+                t: laTime,
+                wspd: isNaN(wspd) || wspd > 90 ? null : wspd * 1.94384,
+                gst: isNaN(gst) || gst > 90 ? null : gst * 1.94384
+            };
+        }).filter(d => d !== null && d.wspd !== null);
+
+        allData.sort((a, b) => a.t - b.t);
+    }
+
+    function initUI() {
+        document.getElementById('upload-box').style.display = 'none';
+        document.getElementById('controls').style.display = 'grid';
+        document.getElementById('dashboard').style.display = 'grid';
+        document.getElementById('hint').style.display = 'block';
+        applyQuickSelect('24h');
+    }
+
+    function applyQuickSelect(val) {
+        if (allData.length === 0) return;
+        const lastDate = allData[allData.length - 1].t;
+        let start;
+
+        if (val === '24h') start = moment(lastDate).subtract(24, 'hours');
+        else if (val === '7d') start = moment(lastDate).subtract(7, 'days');
+        else if (val === 'all') start = allData[0].t;
+        else return;
+
+        document.getElementById('startDate').value = start.format('YYYY-MM-DDTHH:mm');
+        document.getElementById('endDate').value = lastDate.format('YYYY-MM-DDTHH:mm');
+        updateChart();
+    }
+
+    function updateChart() {
+        const startVal = moment(document.getElementById('startDate').value);
+        const endVal = moment(document.getElementById('endDate').value);
+
+        const filtered = allData.filter(d => d.t.isSameOrAfter(startVal) && d.t.isSameOrBefore(endVal));
+        if (filtered.length === 0) return;
+
+        const speeds = filtered.map(d => d.wspd);
+        document.getElementById('stat-max').innerText = Math.max(...speeds).toFixed(1);
+        document.getElementById('stat-avg').innerText = (speeds.reduce((a, b) => a + b, 0) / speeds.length).toFixed(1);
+
+        const ctx = document.getElementById('windChart').getContext('2d');
+        if (myChart) myChart.destroy();
+
+        myChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: filtered.map(d => d.t.toDate()),
+                datasets: [{
+                    label: 'Snelheid (Kts)',
+                    data: filtered.map(d => d.wspd.toFixed(1)),
+                    borderColor: '#1a73e8',
+                    backgroundColor: 'rgba(26, 115, 232, 0.1)',
+                    fill: true,
+                    pointRadius: 0,
+                    tension: 0.2
+                }, {
+                    label: 'Windstoten (Kts)',
+                    data: filtered.map(d => d.gst ? d.gst.toFixed(1) : null),
+                    borderColor: '#ff9800',
+                    borderDash: [5, 5],
+                    fill: false,
+                    pointRadius: 0,
+                    tension: 0.2
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        type: 'time',
+                        time: { unit: 'hour', displayFormats: { hour: 'HH:mm' } },
+                        title: { display: true, text: 'Tijd (Pacific Time)' }
+                    },
+                    y: { beginAtZero: true }
+                },
+                plugins: {
+                    zoom: {
+                        zoom: { wheel: { enabled: true }, pinch: { enabled: true }, mode: 'x' },
+                        pan: { enabled: true, mode: 'x' }
+                    }
+                }
+            }
+        });
+    }
+
+    document.getElementById('refreshBtn').addEventListener('click', fetchLiveData);
+    document.getElementById('quickSelect').addEventListener('change', (e) => applyQuickSelect(e.target.value));
+    
+    // Start
+    fetchLiveData();
+    setInterval(fetchLiveData, 300000); // Elke 5 min
+</script>
+
+<!-- Time Adapter voor Chart.js (nodig voor tijd-as) -->
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment"></script>
+
+</body>
+</html>
