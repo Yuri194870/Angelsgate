@@ -108,10 +108,16 @@
     let firstLoadDone = false;
     let maxObservedSpeed = 20; // valt terug op 20 kts tot de eerste dataset binnen is
 
+    // Drempels die bepalen waar de kleurovergang "versnelt". Pas deze aan als 12/15 kts niet
+    // precies goed voelt voor jouw locatie.
+    const LOW_THRESHOLD_KTS = 12;   // tot hier: blijft bewust licht/rustig van kleur
+    const HIGH_THRESHOLD_KTS = 15;  // vanaf hier: duidelijke sprong naar donker
+
     // Eén verticaal canvasverloop voor de vulling onder de windkracht-lijn: lichtblauw onderin (0 kts)
     // naar donkerblauw bovenin (de all-time hoogst gemeten windsnelheid). Wordt één keer per render
     // opgebouwd (niet per datapunt), en is geankerd aan een vaste waarde i.p.v. de actuele y-as-schaal,
-    // dus het verloop blijft betekenisvol ongeacht waarop je bent ingezoomd.
+    // dus het verloop blijft betekenisvol ongeacht waarop je bent ingezoomd. De kleurovergang is
+    // geconcentreerd rond LOW_THRESHOLD_KTS-HIGH_THRESHOLD_KTS, zodat juist dat verschil opvalt.
     function getSpeedFillGradient(chart) {
         const { ctx, chartArea, scales } = chart;
         if (!chartArea) return 'rgba(26, 115, 232, 0.1)';
@@ -122,9 +128,15 @@
 
         if (yZero === yMax) return 'rgba(26, 115, 232, 0.1)';
 
+        const safeMax = maxObservedSpeed > 0 ? maxObservedSpeed : 1;
+        const lowStop = Math.min(0.95, Math.max(0.02, LOW_THRESHOLD_KTS / safeMax));
+        const highStop = Math.min(0.98, Math.max(lowStop + 0.02, HIGH_THRESHOLD_KTS / safeMax));
+
         const gradient = ctx.createLinearGradient(0, yZero, 0, yMax);
-        gradient.addColorStop(0, 'rgba(191, 219, 254, 0.9)');
-        gradient.addColorStop(1, 'rgba(10, 35, 80, 0.9)');
+        gradient.addColorStop(0, 'rgba(191, 219, 254, 0.55)');        // 0 kts: licht
+        gradient.addColorStop(lowStop, 'rgba(147, 197, 253, 0.55)');  // tot LOW_THRESHOLD_KTS: nog steeds rustig
+        gradient.addColorStop(highStop, 'rgba(30, 58, 138, 0.65)');   // bij HIGH_THRESHOLD_KTS: duidelijke sprong
+        gradient.addColorStop(1, 'rgba(8, 20, 55, 0.7)');             // all-time max: donkerst
         return gradient;
     }
 
