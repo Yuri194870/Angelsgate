@@ -108,17 +108,24 @@
     let firstLoadDone = false;
     let maxObservedSpeed = 20; // valt terug op 20 kts tot de eerste dataset binnen is
 
-    // Kleurt een windsnelheid (kts) op een vaste schaal (0 tot het all-time gemeten maximum),
-    // dus onafhankelijk van de huidige zoom/y-as. Lichtblauw = weinig wind, donkerblauw = veel wind.
-    function speedToColor(kts, alpha) {
-        const safeMax = maxObservedSpeed > 0 ? maxObservedSpeed : 1;
-        const t = Math.max(0, Math.min(1, kts / safeMax));
-        const light = [191, 219, 254];
-        const dark = [10, 35, 80];
-        const r = Math.round(light[0] + (dark[0] - light[0]) * t);
-        const g = Math.round(light[1] + (dark[1] - light[1]) * t);
-        const b = Math.round(light[2] + (dark[2] - light[2]) * t);
-        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    // Eén verticaal canvasverloop voor de vulling onder de windkracht-lijn: lichtblauw onderin (0 kts)
+    // naar donkerblauw bovenin (de all-time hoogst gemeten windsnelheid). Wordt één keer per render
+    // opgebouwd (niet per datapunt), en is geankerd aan een vaste waarde i.p.v. de actuele y-as-schaal,
+    // dus het verloop blijft betekenisvol ongeacht waarop je bent ingezoomd.
+    function getSpeedFillGradient(chart) {
+        const { ctx, chartArea, scales } = chart;
+        if (!chartArea) return 'rgba(26, 115, 232, 0.1)';
+
+        const yScale = scales.y;
+        const yZero = yScale.getPixelForValue(0);
+        const yMax = yScale.getPixelForValue(maxObservedSpeed > 0 ? maxObservedSpeed : 1);
+
+        if (yZero === yMax) return 'rgba(26, 115, 232, 0.1)';
+
+        const gradient = ctx.createLinearGradient(0, yZero, 0, yMax);
+        gradient.addColorStop(0, 'rgba(191, 219, 254, 0.9)');
+        gradient.addColorStop(1, 'rgba(10, 35, 80, 0.9)');
+        return gradient;
     }
 
     const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
@@ -361,15 +368,11 @@
                         label: 'Windsnelheid (Kts)',
                         data: wspdData,
                         borderColor: '#1a73e8',
-                        backgroundColor: 'rgba(26, 115, 232, 0.1)',
+                        backgroundColor: (context) => getSpeedFillGradient(context.chart),
                         borderWidth: 2,
                         fill: true,
                         pointRadius: 0,
-                        tension: 0.2,
-                        segment: {
-                            borderColor: (ctx) => speedToColor((ctx.p0.parsed.y + ctx.p1.parsed.y) / 2, 1),
-                            backgroundColor: (ctx) => speedToColor((ctx.p0.parsed.y + ctx.p1.parsed.y) / 2, 0.25)
-                        }
+                        tension: 0.2
                     },
                     {
                         label: 'Windstoten (Kts)',
