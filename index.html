@@ -33,7 +33,8 @@
         .stat-card .value { font-size: 1.4rem; font-weight: bold; color: #1a73e8; }
         .stat-card .label { font-size: 0.8rem; color: #777; text-transform: uppercase; }
 
-        .chart-container { position: relative; height: 50vh; width: 100%; }
+        .chart-container { position: relative; height: 40vh; width: 100%; }
+        .chart-container-dir { position: relative; height: 18vh; width: 100%; margin-top: 8px; }
         .hint { font-size: 0.75rem; color: #999; margin-top: 10px; text-align: center; }
     </style>
 </head>
@@ -91,15 +92,54 @@
     <div class="chart-container">
         <canvas id="windChart"></canvas>
     </div>
+    <div class="chart-container-dir">
+        <canvas id="dirChart"></canvas>
+    </div>
     <div class="hint" id="hint" style="display:none;">
         Scroll om te zoomen • Klik en sleep om te pannen • Beweeg over de lijn voor details
+        <button id="resetZoomBtn" style="margin-left:10px; background:none; border:1px solid #ccc; border-radius:5px; padding:2px 8px; font-size:0.75rem; color:#555; cursor:pointer;">Reset zoom</button>
     </div>
 </div>
 
 <script>
     let allData = [];
     let myChart = null;
+    let myDirChart = null;
     let firstLoadDone = false;
+
+    const COMPASS_POINTS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW', 'N'];
+    function compassLabel(deg) {
+        return COMPASS_POINTS[Math.round(deg / 45)];
+    }
+
+    // Houdt zoom/pan van beide grafieken gelijk
+    function syncZoomPan(sourceChart) {
+        const targetChart = sourceChart === myChart ? myDirChart : myChart;
+        if (!targetChart) return;
+        const xScale = sourceChart.scales.x;
+        targetChart.options.scales.x.min = xScale.min;
+        targetChart.options.scales.x.max = xScale.max;
+        targetChart.update('none');
+    }
+
+    // Houdt de tooltip/cursor van beide grafieken gelijk bij hoveren
+    function syncHover(src, tgt, evt) {
+        if (!src || !tgt) return;
+        const points = src.getElementsAtEventForMode(evt, 'index', { intersect: false }, true);
+        if (!points.length) return;
+        const idx = points[0].index;
+        const activeTgt = tgt.data.datasets.map((_, dsIndex) => ({ datasetIndex: dsIndex, index: idx }));
+        tgt.setActiveElements(activeTgt);
+        tgt.tooltip.setActiveElements(activeTgt, { x: evt.offsetX, y: evt.offsetY });
+        tgt.update('none');
+    }
+    document.getElementById('windChart').addEventListener('mousemove', (evt) => syncHover(myChart, myDirChart, evt));
+    document.getElementById('dirChart').addEventListener('mousemove', (evt) => syncHover(myDirChart, myChart, evt));
+
+    document.getElementById('resetZoomBtn').addEventListener('click', () => {
+        if (myChart) myChart.resetZoom();
+        if (myDirChart) myDirChart.resetZoom();
+    });
     let currentQuickSelect = '24h';
 
     const NOAA_URL = 'https://www.ndbc.noaa.gov/data/realtime2/AGXC1.txt';
@@ -183,6 +223,7 @@
 
             return {
                 t: laTime,
+                wdir: isNaN(parseFloat(c[5])) ? null : parseFloat(c[5]),
                 wspd: isNaN(parseFloat(c[6])) ? null : parseFloat(c[6]) * 1.94384,
                 gst: isNaN(parseFloat(c[7])) ? null : parseFloat(c[7]) * 1.94384
             };
@@ -313,15 +354,98 @@
                             wheel: { enabled: true },
                             pinch: { enabled: true },
                             mode: 'x',
+                            onZoom: ({ chart }) => syncZoomPan(chart)
                         },
                         pan: {
                             enabled: true,
                             mode: 'x',
+                            onPan: ({ chart }) => syncZoomPan(chart)
                         }
                     },
                     tooltip: {
                         callbacks: {
                             title: (items) => moment(items[0].label).format('LLLL')
+                        }
+                    }
+                }
+            }
+        });
+
+        // 4. WINDRICHTING GRAFIEK
+        const dirData = filtered.map(d => d.wdir);
+
+        if (myDirChart) myDirChart.destroy();
+
+        const dctx = document.getElementById('dirChart').getContext('2d');
+        myDirChart = new Chart(dctx, {
+            type: 'line',
+            data: {
+                labels: labels,
+                datasets: [
+                    {
+                        label: 'Windrichting',
+                        data: dirData,
+                        borderColor: '#00897b',
+                        backgroundColor: 'rgba(0, 137, 123, 0.08)',
+                        borderWidth: 2,
+                        fill: false,
+                        pointRadius: 0,
+                        tension: 0,
+                        spanGaps: false,
+                        // Geen verbindingslijn tekenen als de richting door Noord springt (bv. 350° -> 10°)
+                        segment: {
+                            borderColor: (ctx) => {
+                                const y0 = ctx.p0.parsed.y, y1 = ctx.p1.parsed.y;
+                                if (y0 === null || y1 === null) return undefined;
+                                return Math.abs(y1 - y0) > 180 ? 'rgba(0,0,0,0)' : undefined;
+                            }
+                        }
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: {
+                        type: 'category',
+                        ticks: {
+                            callback: function(val, index) {
+                                return moment(this.getLabelForValue(val)).format('DD MMM HH:mm');
+                            },
+                            maxTicksLimit: 12
+                        }
+                    },
+                    y: {
+                        min: 0,
+                        max: 360,
+                        title: { display: true, text: 'Richting' },
+                        ticks: {
+                            stepSize: 45,
+                            callback: (val) => compassLabel(val)
+                        }
+                    }
+                },
+                plugins: {
+                    legend: { display: false },
+                    zoom: {
+                        zoom: {
+                            wheel: { enabled: true },
+                            pinch: { enabled: true },
+                            mode: 'x',
+                            onZoom: ({ chart }) => syncZoomPan(chart)
+                        },
+                        pan: {
+                            enabled: true,
+                            mode: 'x',
+                            onPan: ({ chart }) => syncZoomPan(chart)
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            title: (items) => moment(items[0].label).format('LLLL'),
+                            label: (item) => item.raw === null ? 'Windrichting: onbekend' : `Windrichting: ${item.raw}° (${compassLabel(item.raw)})`
                         }
                     }
                 }
