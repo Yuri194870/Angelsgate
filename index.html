@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <link rel="icon" href="data:;base64,iVBORw0KGgo=">
-    <title>Advanced Wind Monitor AGXC1</title>
+    <title> Wind Monitor AGXC1</title>
     
     <!-- Bibliotheken -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -42,7 +42,7 @@
 
 <div class="container">
     <div class="header">
-        <h1>AGXC1 Wind Monitor - Angel Island</h1>
+        <h1>AGXC1 Wind Monitor - Angel's Gate</h1>
         <div style="text-align: right;">
             <button id="refreshBtn" style="background:#1a73e8; color:white; border:none; padding:6px 14px; border-radius:6px; font-weight:bold; cursor:pointer;">↻ Ververs</button>
             <div id="file-status" style="font-size: 0.75rem; color: #777; margin-top: 4px;"></div>
@@ -112,6 +112,37 @@
         return COMPASS_POINTS[Math.round(deg / 45)];
     }
 
+    // Subtiele verticale lijn op het geselecteerde tijdstip
+    const crosshairPlugin = {
+        id: 'crosshair',
+        afterDraw(chart) {
+            const active = chart.tooltip && chart.tooltip.getActiveElements ? chart.tooltip.getActiveElements() : [];
+            if (!active || !active.length) return;
+            const x = active[0].element.x;
+            const { top, bottom } = chart.chartArea;
+            const ctx = chart.ctx;
+            ctx.save();
+            ctx.beginPath();
+            ctx.moveTo(x, top);
+            ctx.lineTo(x, bottom);
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+            ctx.setLineDash([4, 4]);
+            ctx.stroke();
+            ctx.restore();
+        }
+    };
+    Chart.register(crosshairPlugin);
+
+    // Standaard tooltip-styling: subtieler/transparanter dan de Chart.js default
+    const SUBTLE_TOOLTIP = {
+        backgroundColor: 'rgba(30, 30, 30, 0.55)',
+        titleColor: '#ffffff',
+        bodyColor: '#ffffff',
+        padding: 8,
+        cornerRadius: 6
+    };
+
     // Houdt zoom/pan van beide grafieken gelijk
     function syncZoomPan(sourceChart) {
         const targetChart = sourceChart === myChart ? myDirChart : myChart;
@@ -122,19 +153,16 @@
         targetChart.update('none');
     }
 
-    // Houdt de tooltip/cursor van beide grafieken gelijk bij hoveren
-    function syncHover(src, tgt, evt) {
-        if (!src || !tgt) return;
-        const points = src.getElementsAtEventForMode(evt, 'index', { intersect: false }, true);
-        if (!points.length) return;
-        const idx = points[0].index;
-        const activeTgt = tgt.data.datasets.map((_, dsIndex) => ({ datasetIndex: dsIndex, index: idx }));
-        tgt.setActiveElements(activeTgt);
-        tgt.tooltip.setActiveElements(activeTgt, { x: evt.offsetX, y: evt.offsetY });
-        tgt.update('none');
+    // Houdt cursor/tooltip/crosshair van beide grafieken gelijk bij hoveren, klikken of aanraken
+    function syncHoverFromElements(sourceChart, activeElements) {
+        const targetChart = sourceChart === myChart ? myDirChart : myChart;
+        if (!targetChart || !activeElements.length) return;
+        const idx = activeElements[0].index;
+        const activeTarget = targetChart.data.datasets.map((_, dsIndex) => ({ datasetIndex: dsIndex, index: idx }));
+        targetChart.setActiveElements(activeTarget);
+        targetChart.tooltip.setActiveElements(activeTarget, { x: 0, y: 0 });
+        targetChart.update('none');
     }
-    document.getElementById('windChart').addEventListener('mousemove', (evt) => syncHover(myChart, myDirChart, evt));
-    document.getElementById('dirChart').addEventListener('mousemove', (evt) => syncHover(myDirChart, myChart, evt));
 
     document.getElementById('resetZoomBtn').addEventListener('click', () => {
         if (myChart) myChart.resetZoom();
@@ -335,6 +363,7 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
+                onHover: (event, elements) => syncHoverFromElements(myChart, elements),
                 scales: {
                     x: {
                         type: 'category', // We gebruiken categorie voor de labels
@@ -363,6 +392,7 @@
                         }
                     },
                     tooltip: {
+                        ...SUBTLE_TOOLTIP,
                         callbacks: {
                             title: (items) => moment(items[0].label).format('LLLL')
                         }
@@ -407,6 +437,7 @@
                 responsive: true,
                 maintainAspectRatio: false,
                 interaction: { mode: 'index', intersect: false },
+                onHover: (event, elements) => syncHoverFromElements(myDirChart, elements),
                 scales: {
                     x: {
                         type: 'category',
@@ -443,6 +474,7 @@
                         }
                     },
                     tooltip: {
+                        ...SUBTLE_TOOLTIP,
                         callbacks: {
                             title: (items) => moment(items[0].label).format('LLLL'),
                             label: (item) => item.raw === null ? 'Windrichting: onbekend' : `Windrichting: ${item.raw}° (${compassLabel(item.raw)})`
